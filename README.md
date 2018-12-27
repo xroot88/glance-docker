@@ -1,0 +1,2 @@
+# glance-docker
+dockerized glance
