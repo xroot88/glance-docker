@@ -1,39 +1,10 @@
 #!/usr/bin/env bash
 
-TLS_ENABLED=${TLS_ENABLED:-false}
-if $TLS_ENABLED; then
-    HTTP="https"
-    CN=${CN:-$HOSTNAME}
-    # generate pem and crt files
-    mkdir -p /etc/apache2/ssl
-    openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-        -keyout /etc/apache2/ssl/apache.key -out /etc/apache2/ssl/apache.crt \
-        -subj "/C=$CONUTRY/ST=$STATE/L=$LOCALITY/O=$ORG/OU=$ORG_UNIT/CN=$CN"
-else
-    HTTP="http"
-fi
+HTTP="http"
+GLANCE_DB_ROOT_PASSWD=$GLANCE_DB_ROOT_PASSWD_IF_REMOTED
 
-if [ -z $GLANCE_DB_HOST ]; then
-    GLANCE_DB_HOST=localhost
-    # start mysql locally
-    service mysql restart
-
-    #Docker OverlayFS compatibility: implements subset POSIX standards
-    #https://docs.docker.com/storage/storagedriver/overlayfs-driver/
-    #ALT: attach /var/lib/mysql as a volume to avoid timeout
-    if [ $? ] ; then
-        find /var/lib/mysql -type f -exec touch {} \;
-        service mysql restart
-    fi
-else
-    if [ -z $GLANCE_DB_ROOT_PASSWD_IF_REMOTED ]; then
-        echo "Your'are using Remote MySQL Database; "
-        echo "Please set GLANCE_DB_ROOT_PASSWD_IF_REMOTED when running a container."
-        exit 1;
-    else
-        GLANCE_DB_ROOT_PASSWD=$GLANCE_DB_ROOT_PASSWD_IF_REMOTED
-    fi
-fi
+# create appropriate directories
+mkdir -p /var/lib/glance/images /etc/glance/ /var/log/glance/
 
 addgroup --system glance >/dev/null || true
 adduser --quiet --system --home /var/lib/glance \
@@ -44,9 +15,6 @@ if [ "$(id -gn glance)"  = "nogroup" ]
 then
     usermod -g glance glance
 fi
-
-# create appropriate directories
-mkdir -p /var/lib/glance/ /etc/glance/ /var/log/glance/
 
 # change the permissions on key directories
 chown glance:glance -R /var/lib/glance/ /etc/glance/ /var/log/glance/
@@ -82,29 +50,27 @@ EOF
 openstack user create --domain default --password $GLANCE_DB_PASSWD glance
 openstack role add --project service --user glance admin
 openstack service create --name glance --description "OpenStack Image" image
-openstack endpoint create --region RegionOne image public $HTTP://${KEYSTONE_HOST}:9292
-openstack endpoint create --region RegionOne image internal $HTTP://${KEYSTONE_HOST}:9292
-openstack endpoint create --region RegionOne image admin $HTTP://${KEYSTONE_HOST}:9292
+openstack endpoint create --region RegionOne image public $HTTP://${HOSTNAME}:9292
+openstack endpoint create --region RegionOne image internal $HTTP://${HOSTNAME}:9292
+openstack endpoint create --region RegionOne image admin $HTTP://${HOSTNAME}:9292
+
+ls -l /etc/glance
 # Populate glance database
 su -s /bin/sh -c 'glance-manage db_sync' glance
 
-# Configure Apache2
-echo "ServerName $HOSTNAME" >> /etc/apache2/apache2.conf
-a2enmod proxy_http
-
-# if TLS is enabled
-if $TLS_ENABLED; then
-echo "export OS_CACERT=/etc/apache2/ssl/apache.crt" >> /root/openrc
-a2enmod ssl
-sed -i '/<VirtualHost/a \
-    SSLEngine on \
-    SSLCertificateFile /etc/apache2/ssl/apache.crt \
-    SSLCertificateKeyFile /etc/apache2/ssl/apache.key \
-    ' /etc/apache2/sites-available/glance.conf
+# setup NFS if requested
+if [ -z $IMAGE_STORE_NFS_MOUNTPOINT ]; then
+        echo 'No NFS mount point specified. Using local storage for images'
+else
+	options='-o nolock'
+	if [ -z $NFS_USERNAME ]; then
+		echo 'No username specified for NFS mount. Assuming local root'
+	else
+		options+=" -o username=$NFS_USERNAME,password=$NFS_PASSWORD "
+	fi
+	mount $options $IMAGE_STORE_NFS_MOUNTPOINT /var/lib/glance/images
 fi
 
-ln -s /etc/apache2/sites-available/uwsgi-glance-api.conf /etc/apache2/sites-enabled
-apache2ctl start
-
-sed -i '/plugins = python/d' /etc/glance/glance-api-uwsgi.ini
-uwsgi --ini /etc/glance/glance-api-uwsgi.ini
+#/usr/local/bin/glance-control api start glance-api.conf
+/usr/local/bin/glance-control registry start /etc/glance/glance-registry.conf
+/usr/local/bin/glance-api --config-file /etc/glance/glance-api.conf --debug

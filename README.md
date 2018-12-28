@@ -12,13 +12,10 @@ as retrieval of the actual image.
 
 # What can this docker image do ?
 
-* Running Glance with **http** (default) or
-    **https** (by passing `-e TLS_ENABLED=true`,
+* Running Glance with **http** (default)
     see more in [Environment Variables Explanations](https://github.com/xroot88/glance-docker#environment-variables-explanations)) enabled;
-* Uses the **Apache Web Server** with `mod_wsgi` to serve Identity service
-    requests on port `5000` and `35357`;
 * Supports remote mysql database;
-* Utilizes **Memcached** from the Glance container;
+* Utilizes **Memcached** from the Keystone container;
 * Customizes/Builds your own Glance docker image by editing the value
     of `GLANCE_VERSION` in `Dockerfile`;
 
@@ -86,68 +83,17 @@ from other servers after sourcing it.*
 | GLANCE_DB_ROOT_PASSWD_IF_REMOTED   |               | True                                                    | MySQL remote database root user password; Combined with GLANCE_DB_HOST                           |
 | MEMCACHED_HOST                     |               | True                                                    | Hostname of the memcached service (typically the keystone service)                               |
 | KEYSTONE_HOST                      |               | True                                                    | Hostname of the keystone service                                                                 |
-
-## CSR (Certificate Signing Request) Environment Variables
-
-If you've enabled `TLS_ENABLED` (with `-e TLS_ENABLED=true`), below environment
-variables have to be noticed. You can just ignore them if you
-don't want to make any further customizations.
-
-| Environment Name | Default Value | Meaning             | Example         |
-|------------------|---------------|---------------------|-----------------|
-| CONUTRY          | NULL          | Country             | GB              |
-| STATE            | NULL          | State               | London          |
-| LOCALITY         | NULL          | Location            | London          |
-| ORG              | NULL          | Organization        | Global Security |
-| ORG_UNIT         | NULL          | Organizational Unit | IT Department   |
-| CN               | The Hostname  | Common Name         | example.com     |
-
-**Note**: *Be aware of `CN` (the default value is `$hostname`). You'd better
-not change it to other value.*
+| IMAGE_STORE_NFS_MOUNTPOINT         |               | True                                                    | NFS mountpoint where glance image files are stored. Format: hostname:/mountpoint                 |
+| NFS_USER                           |               | True                                                    | NFS username                                                                                     |
+| NFS_PASSWORD                       |               | True                                                    | NFS user pasd                                                                                    |
 
 
-## Example 1: Running with TLS enabled
-
-```sh
-$ docker run -d -p 5000:5000 -p 35357:35357 -e TLS_ENABLED=true \
-    -h myglance.com --name my_glance_tls glance:17.0.0
-```
-
-## Example 2: Running with remote MySQL database
-
-```sh
-$ docker run -d -p 9292:9292 -e GLANCE_DB_HOST=192.168.100.202 \
-    -e GLANCE_DB_ROOT_PASSWD_IF_REMOTED=your_password \
-    -h myglance.com --name my_glance_db glance:17.0.0
-```
-
-## Example 3: Accessing the Apache Certificate File
-
-```sh
-$ mkdir -p ./apache/
-$ docker run -d -p 9292:9292 -v `pwd`/apache/:/etc/apache2 \
-    -h myglance.com --name my_glance_ca glance:17.0.0
-```
-
-## Example 4: Customize your Glance configuration
-
-```sh
-$ git clone https://github.com/dixudx/glance-docker.git
-$ cd glance-docker
-# then modify all related configurations in folder ./etc
-# especially ./etc/glance.conf
-$ docker run -d -p 9292:9292 -v `pwd`/etc/:/etc/glance/ \
-    -h myglance.com --name my_glance_ca glance:17.0.0
-```
-
-You can copy `/root/openrc` in your container to your host server,
-and replace `OS_CACERT` to this `$pwd/apache/ssl/apache.crt`
-(replace `$pwd` with your real directory path).
+You can copy `/root/openrc` in your container to your host server.
 So that you access the glance services using openstack python client
 ( `pip install python-openstackclient` ) from outer of the the container.
 
 **Note**: *On your host server,
-you may also need to add `myglance.com` to `/etc/hosts`.*
+you may also need to add your glance container hostname and IP to `/etc/hosts`.*
 
 
 # Reference
@@ -155,13 +101,24 @@ you may also need to add `myglance.com` to `/etc/hosts`.*
 * [Glance, the OpenStack Image Service](http://docs.openstack.org/developer/glance/)
 * [Installing Glance](http://docs.openstack.org/developer/glance/installing.html)
 
-# alexm notes:
+# Quick Start
 
 ```sh
 $ sudo docker build -t glance:17.0.0 ./
-$ sudo docker run -it -p 9292:9292 -e GLANCE_DB_HOST=192.168.2.6 -e GLANCE_DB_ROOT_PASSWD_IF_REMOTED=cisco123 -e KEYSTONE_HOST=keystone.ghettocoders.com -e MEMCACHED_HOST=keystone.ghettocoders.com --link keystone01:keystone.ghettocoders.com --name glance01 glance:17.0.0
+$ sudo docker run --rm -it -p 9292:9292 -e GLANCE_DB_HOST=192.168.2.6 -e GLANCE_DB_ROOT_PASSWD_IF_REMOTED=cisco123 -e KEYSTONE_HOST=keystone.ghettocoders.com -e MEMCACHED_HOST=keystone.ghettocoders.com --link keystone01:keystone.ghettocoders.com --name glance01 -h glance.ghettocoders.com glance:17.0.0
 $ sudo docker exec -it glance01 bash
 container-id# source /root/openrc
-container-id# openstack user list
 container-id# openstack token issue
+container-id# openstack image list
+container-id# wget http://download.cirros-cloud.net/0.3.4/cirros-0.3.4-x86_64-disk.img
+container-id# openstack image create "cirros" --file cirros-0.3.4-x86_64-disk.img --disk-format qcow2 --container-format bare --public
+```
+
+# With NFS as a backing device
+
+Use --privileged=true flag to allow NFS mounts in the container.
+Example:
+
+```sh
+$ sudo docker run --rm -it -p 9292:9292 -e GLANCE_DB_HOST=192.168.2.6 -e GLANCE_DB_ROOT_PASSWD_IF_REMOTED=cisco123 -e KEYSTONE_HOST=keystone.ghettocoders.com -e MEMCACHED_HOST=keystone.ghettocoders.com --link keystone01:keystone.ghettocoders.com --name glance01 -h glance.ghettocoders.com -e IMAGE_STORE_NFS_MOUNTPOINT=192.168.2.5:/mnt/pool/public --privileged=true glance:17.0.
 ```
