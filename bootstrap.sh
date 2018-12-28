@@ -47,6 +47,10 @@ export OS_IMAGE_API_VERSION=2
 EOF
 
 . /root/openrc
+
+# Create project service if does not exist
+openstack project show service && echo 'Project service exists. Good.' || openstack project create --domain default service
+
 openstack user create --domain default --password $GLANCE_DB_PASSWD glance
 openstack role add --project service --user glance admin
 openstack service create --name glance --description "OpenStack Image" image
